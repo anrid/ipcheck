@@ -1,9 +1,9 @@
 # IP Checker
 
-- Check IPs against a large set of IP ranges.
-- Pass in a file or URL.
-- Checks against known [datacenter IP ranges](https://raw.githubusercontent.com/jhassine/server-ip-addresses/master/data/datacenters.csv) by default, using data from [this project](https://github.com/jhassine/server-ip-addresses).
-- Uses an Interval Tree for fast matching. Able to check `500k IPs` against `>33k IP ranges` in a couple of seconds (on my MacBook Pro).
+- Check IP addresses against a large set of IP address ranges.
+- Pass in a file or URL, e.g. an access log or a DB export containing one or more IP addresses per line.
+- Checks IPs against known [datacenter IP ranges](https://raw.githubusercontent.com/jhassine/server-ip-addresses/master/data/datacenters.csv) by default, using data from [this project](https://github.com/jhassine/server-ip-addresses).
+- Uses an Interval Tree for fast matching. Able to check `>500k IPs` against `>33k IP ranges` in a couple of seconds (on a MacBook Pro).
 
 ## Docker Image
 
@@ -26,7 +26,7 @@ aaazureee51.105.74.151eeeruzaaa
 # The program uses a regexp to find all IPs on each line in the input file (will match one or more IPs per line).
 
 # To check IPs against known datacenter IP ranges, simply do:
-$ docker run --rm -it anrid/ipcheck -i /test-ips.txt
+$ docker run --rm anrid/ipcheck -i /test-ips.txt
 
 20.150.136.0          | 20.150.128.0         - 20.150.255.255       Azure
 3.64.226.240          | 3.64.0.0             - 3.79.255.255         AWS
@@ -39,7 +39,7 @@ found 3 matches | checked 6 IPs against 33365 ranges (0 dupes)
 
 ```bash
 # To check ~600,000 IPs that I've exported from access logs stored in Bigquery:
-$ time docker run --rm -it -v $(pwd)/../bigquery-exports:/data  anrid/ipcheck -i /data/bq-results-20230311.csv
+$ time docker run --rm -v $(pwd)/../bigquery-exports:/data anrid/ipcheck -i /data/bq-results-20230311.csv
 
 ... 879 rows omitted ...
 
@@ -66,7 +66,7 @@ $ cat data/test-ranges.txt
 "x","3.64.226.240","3.64.226.243","AWS"
 
 # Then pass in your CSV file using the --ip-ranges flag:
-$ docker run --rm -it -v $(pwd)/data:/data  anrid/ipcheck -i /data/test-ips.txt --ip-ranges /data/test-ranges.txt
+$ docker run --rm -v $(pwd)/data:/data anrid/ipcheck -i /data/test-ips.txt --ip-ranges /data/test-ranges.txt
 
 3.64.226.240          | 3.64.226.240         - 3.64.226.243         AWS
 found 1 matches | checked 6 IPs against 3 ranges (0 dupes)
