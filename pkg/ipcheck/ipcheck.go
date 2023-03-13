@@ -9,12 +9,17 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 
 	"github.com/anrid/ipcheck/pkg/interval"
+	"github.com/anrid/ipcheck/pkg/iputil"
 )
 
-func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL string, verboseOutput bool) (numMatchesFound int) {
+func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireholFile string, verboseOutput bool) (numMatchesFound int) {
 	ipRanges := interval.NewIntervalTree()
+	var ipNumbers []*IPMap
+	var ipNumMap *IPMap
+
 	var numRanges int
 
 	if verboseOutput {
@@ -27,11 +32,11 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL string, verboseOu
 			return nil
 		}
 
-		hostmin := record[1]
-		hostmax := record[2]
+		cidr := record[0]
 		vendor := record[3]
+		start, end := iputil.CIDRToIPRange(cidr)
 
-		r, err := interval.NewInterval(hostmin, hostmax)
+		r, err := interval.NewInterval(start, end)
 		if err != nil {
 			return err
 		}
@@ -42,6 +47,49 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL string, verboseOu
 
 		return nil
 	})
+
+	// Check against firehol data (https://github.com/firehol/blocklist-ipsets)
+	if fireholFile != "" {
+		f, err := os.Open(fireholFile)
+		if err != nil {
+			log.Fatalf("could not open firehol DB file: %s - error: %s\n", fireholFile, err)
+		}
+		defer f.Close()
+
+		scanner := bufio.NewScanner(f)
+		var vendor string
+
+		for scanner.Scan() {
+			t := scanner.Text()
+			if len(t) > 0 {
+				if t[0] == '#' {
+					vendor = t[2:]
+					ipNumMap = &IPMap{
+						Vendor: vendor,
+						IPs:    make(map[uint32]bool),
+					}
+					ipNumbers = append(ipNumbers, ipNumMap)
+					continue
+				}
+				if strings.ContainsRune(t, '/') {
+					// CIDR
+					start, end := iputil.CIDRToIPRange(t)
+
+					r, err := interval.NewInterval(start, end)
+					if err != nil {
+						log.Panicf("could not create interval for CIDR %s (%s - %s)", t, start, end)
+					}
+
+					ipRanges.Upsert(r, vendor)
+
+					numRanges++
+				} else {
+					// IP
+					ipNumMap.IPs[iputil.IP2Long(t)] = true
+				}
+			}
+		}
+	}
 
 	if verboseOutput {
 		fmt.Printf("Loaded %d IP ranges into interval tree\n", numRanges)
@@ -72,20 +120,34 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL string, verboseOu
 			}
 
 			res, err := ipRanges.FindFirstOverlapping(r)
-			if err != nil {
-				// No match found.
+			if err == nil {
+				// Found overlapping range.
+				info := fmt.Sprintf("%-20s - %-20s %s", res.Interval.IPRangeMin, res.Interval.IPRangeMax, res.Payload)
+				if _, found := dupes[ip]; found {
+					numDupes++
+				}
+				dupes[ip] = append(dupes[ip], info)
+
+				fmt.Printf("%-20s  | %-20s - %-20s %s\n", ip, res.Interval.IPRangeMin, res.Interval.IPRangeMax, res.Payload)
+				numMatchesFound++
 				continue
 			}
 
-			info := fmt.Sprintf("%-20s - %-20s %s", res.Interval.IPRangeMin, res.Interval.IPRangeMax, res.Payload)
-			if _, found := dupes[ip]; found {
-				numDupes++
-			}
-			dupes[ip] = append(dupes[ip], info)
+			ipn := iputil.IP2Long(ip)
 
-			// Match found!
-			fmt.Printf("%-20s  | %-20s - %-20s %s\n", ip, res.Interval.IPRangeMin, res.Interval.IPRangeMax, res.Payload)
-			numMatchesFound++
+			for _, ns := range ipNumbers {
+				if ns.IPs[ipn] {
+					// Found matching IP.
+					if _, found := dupes[ip]; found {
+						numDupes++
+					}
+					dupes[ip] = append(dupes[ip], ns.Vendor)
+
+					fmt.Printf("%-20s  | %s\n", ip, ns.Vendor)
+					numMatchesFound++
+					break
+				}
+			}
 		}
 
 		return nil
@@ -94,6 +156,11 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL string, verboseOu
 	fmt.Printf("found %d matches | checked %d IPs against %d ranges (%d dupes)\n", numMatchesFound, numIPsFound, numRanges, numDupes)
 
 	return
+}
+
+type IPMap struct {
+	Vendor string
+	IPs    map[uint32]bool
 }
 
 func readCSVFileOrURL(fileOrURL string, forEachRecord func(recordNumber int, record []string) error) {

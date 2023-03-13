@@ -11,6 +11,7 @@ func TestIPCheck(t *testing.T) {
 		found := CheckAgainstIPRanges(
 			"../../data/test-ips.txt",
 			"https://raw.githubusercontent.com/jhassine/server-ip-addresses/master/data/datacenters.csv",
+			"",
 			true,
 		)
 

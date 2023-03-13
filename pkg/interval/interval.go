@@ -3,11 +3,9 @@
 package interval
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
-	"net"
 
+	"github.com/anrid/ipcheck/pkg/iputil"
 	"github.com/pkg/errors"
 )
 
@@ -21,8 +19,8 @@ type Interval struct {
 
 // NewInterval returns a new Interval or an error if end is before start.
 func NewInterval(ipRangeMin, ipRangeMax string) (Interval, error) {
-	min := ip2Long(ipRangeMin)
-	max := ip2Long(ipRangeMax)
+	min := iputil.IP2Long(ipRangeMin)
+	max := iputil.IP2Long(ipRangeMax)
 
 	if min > max {
 		return Interval{}, errors.Errorf("invalid ip range: range max before min [%s - %s]", ipRangeMin, ipRangeMax)
@@ -56,10 +54,4 @@ func (i Interval) overlaps(x Interval) bool {
 
 func (i Interval) String() string {
 	return fmt.Sprintf("[%d - %d]", i.low, i.high)
-}
-
-func ip2Long(ip string) uint32 {
-	var long uint32
-	binary.Read(bytes.NewBuffer(net.ParseIP(ip).To4()), binary.BigEndian, &long)
-	return long
 }
