@@ -7,35 +7,42 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/anrid/ipcheck/pkg/iputil"
 )
 
 const (
-	fireholGitRepo = "git@github.com:firehol/blocklist-ipsets.git"
+	fireHOLBlocklistRepoURL = "https://github.com/firehol/blocklist-ipsets/archive/refs/heads/master.zip"
 )
 
-func ImportFromGithubRepo(outDir string, forceClone bool) {
+func Import(outDir string, forceDownload bool) {
 	createDirIfNotExists(outDir)
 
-	checkoutDir := filepath.Join(outDir, "blocklist-ipsets")
+	unpackedDir := filepath.Join(outDir, "blocklist-ipsets-master")
+	zipFile := filepath.Join(outDir, "master.zip")
 
-	if isDir(checkoutDir) {
-		fmt.Printf("Found previously cloned Git repo: %s\n", checkoutDir)
+	if isDir(unpackedDir) {
+		fmt.Printf("Found previously downloaded Git repo: %s\n", unpackedDir)
 
-		if forceClone {
-			fmt.Printf("Force clone flag passed, removing local files and cloning Git repo again ..\n")
+		if forceDownload {
+			fmt.Printf("Force download flag passed, removing local files and downloading Git repo again ..\n")
 
-			err := os.RemoveAll(checkoutDir)
+			err := os.RemoveAll(unpackedDir)
 			if err != nil {
-				log.Fatalf("could not delete existing Git repo: %s - error: %s", checkoutDir, err)
+				log.Fatalf("could not delete existing dir: %s - error: %s", unpackedDir, err)
 			}
+			// Try deleting old zip archive.
+			os.Remove(zipFile)
 
-			cloneGitRepo(fireholGitRepo, checkoutDir)
+			wgetURL(fireHOLBlocklistRepoURL, outDir)
+			unzip(outDir, zipFile)
 		}
 	} else {
-		cloneGitRepo(fireholGitRepo, checkoutDir)
+		wgetURL(fireHOLBlocklistRepoURL, outDir)
+		unzip(outDir, zipFile)
 	}
 
-	files := findAllIPAndNetsets(checkoutDir)
+	files := findAllIPAndNetsets(unpackedDir)
 	fmt.Printf("Found %d IP sets\n", len(files))
 
 	outFile := filepath.Join(outDir, "firehol.ips")
@@ -52,6 +59,10 @@ func ImportFromGithubRepo(outDir string, forceClone bool) {
 		"geolite2_country",
 	}
 
+	var importedSets, importedRanges, importedIPs int64
+	dupes := make(map[uint32]bool)
+	var numDupes int64
+
 SKIP:
 	for _, f := range files {
 		for _, ex := range excluded {
@@ -61,6 +72,7 @@ SKIP:
 		}
 
 		ips := loadIPSet(f)
+		importedSets++
 
 		fmt.Printf("Loaded IP set: %s (%d CIDRs, %d IPs)\n", ips.Name, len(ips.CIDRs), len(ips.IPs))
 
@@ -70,13 +82,29 @@ SKIP:
 			for _, cidr := range ips.CIDRs {
 				of.WriteString(cidr)
 				of.WriteString("\n")
+				importedRanges++
 			}
 			for _, ip := range ips.IPs {
-				of.WriteString(ip)
-				of.WriteString("\n")
+				ipn := iputil.IP2Long(ip)
+
+				// Skip dupes!
+				if !dupes[ipn] {
+					of.WriteString(ip)
+					of.WriteString("\n")
+					importedIPs++
+
+					dupes[ipn] = true
+				} else {
+					numDupes++
+				}
 			}
 		}
 	}
+
+	fmt.Printf(
+		"\nImported FireHOL %d blocklists (%d ranges, %d blocked / flagged IPs, %d dupes)\n",
+		importedSets, importedRanges, importedIPs, numDupes,
+	)
 }
 
 type IPSet struct {
@@ -160,8 +188,13 @@ func findAllIPAndNetsets(dir string) (files []string) {
 	return
 }
 
-func cloneGitRepo(repo, checkoutDir string) {
-	res := mustExecCommand("git", "clone", "--depth", "1", repo, checkoutDir)
+func wgetURL(url, dir string) {
+	res := mustExecCommand("wget", "-q", "-P", dir, url)
+	fmt.Println(res)
+}
+
+func unzip(outDir, file string) {
+	res := mustExecCommand("unzip", "-oq", "-d", outDir, file)
 	fmt.Println(res)
 }
 
@@ -181,10 +214,10 @@ func mustExecCommand(command string, args ...string) (stdoutStderr string) {
 func isDir(path string) bool {
 	s, err := os.Stat(path)
 	if err != nil {
-		if err == os.ErrNotExist {
+		if os.IsNotExist(err) {
 			return false
 		}
-		log.Fatalf("could not access path %s", path)
+		log.Panicf("unknown error: %s", err)
 	}
 	return s.IsDir()
 }
@@ -192,8 +225,8 @@ func isDir(path string) bool {
 func createDirIfNotExists(path string) {
 	s, err := os.Stat(path)
 	if err != nil {
-		if err != os.ErrNotExist {
-			log.Fatalf("could not access path %s", path)
+		if !os.IsNotExist(err) {
+			log.Panicf("could not access path %s - error: %s", path, err)
 		}
 
 		fmt.Printf("Creating dir %s ..", path)

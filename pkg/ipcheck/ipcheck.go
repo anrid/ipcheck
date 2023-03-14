@@ -15,17 +15,19 @@ import (
 	"github.com/anrid/ipcheck/pkg/iputil"
 )
 
-func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireholFile string, verboseOutput bool) (numMatchesFound int) {
-	ipRanges := interval.NewIntervalTree()
-	var ipNumbers []*IPMap
-	var ipNumMap *IPMap
+const (
+	debug = false
+)
 
+func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile string, verboseOutput bool) (numMatchesFound int) {
+	ipRanges := interval.NewIntervalTree()
+	ipNumbers := make(map[uint32]uint16)
+	ipNumberSources := make(map[uint16]string)
 	var numRanges int
 
 	if verboseOutput {
 		fmt.Printf("Reading IP ranges from %s ..\n", ipRangesCSVFileOrURL)
 	}
-
 	readCSVFileOrURL(ipRangesCSVFileOrURL, func(recordNumber int, record []string) error {
 		if recordNumber == 1 {
 			// Skip headers.
@@ -48,29 +50,39 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireholFile stri
 		return nil
 	})
 
-	// Check against firehol data (https://github.com/firehol/blocklist-ipsets)
-	if fireholFile != "" {
-		f, err := os.Open(fireholFile)
+	if verboseOutput {
+		fmt.Printf("Loaded %d IP ranges into interval tree\n", numRanges)
+		fmt.Printf("Loaded %d IPs into hash map\n", len(ipNumbers))
+	}
+
+	// Check against FireHOL data imported from here: https://github.com/firehol/blocklist-ipsets
+	// If you don't know, FireHOL is "an iptables stateful packet filtering firewall for humans!".
+	// Learn more at https://github.com/firehol/firehol.
+	if fireHOLFile != "" {
+		if verboseOutput {
+			fmt.Printf("Loading FireHOL data from %s (this takes a while) ..\n", fireHOLFile)
+		}
+
+		f, err := os.Open(fireHOLFile)
 		if err != nil {
-			log.Fatalf("could not open firehol DB file: %s - error: %s\n", fireholFile, err)
+			log.Fatalf("could not open FireHOL DB file: %s - error: %s\n", fireHOLFile, err)
 		}
 		defer f.Close()
 
 		scanner := bufio.NewScanner(f)
-		var vendor string
+		var src string
+		var srcID uint16
 
 		for scanner.Scan() {
 			t := scanner.Text()
 			if len(t) > 0 {
 				if t[0] == '#' {
-					vendor = t[2:]
-					ipNumMap = &IPMap{
-						Vendor: vendor,
-						IPs:    make(map[uint32]bool),
-					}
-					ipNumbers = append(ipNumbers, ipNumMap)
+					src = t[2:]
+					srcID++
+					ipNumberSources[srcID] = src
 					continue
 				}
+
 				if strings.ContainsRune(t, '/') {
 					// CIDR
 					start, end := iputil.CIDRToIPRange(t)
@@ -80,19 +92,19 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireholFile stri
 						log.Panicf("could not create interval for CIDR %s (%s - %s)", t, start, end)
 					}
 
-					ipRanges.Upsert(r, vendor)
+					ipRanges.Upsert(r, src)
 
 					numRanges++
 				} else {
 					// IP
-					ipNumMap.IPs[iputil.IP2Long(t)] = true
+					ipNumbers[iputil.IP2Long(t)] = srcID
 				}
 			}
 		}
-	}
-
-	if verboseOutput {
-		fmt.Printf("Loaded %d IP ranges into interval tree\n", numRanges)
+		if verboseOutput {
+			fmt.Printf("Loaded %d IP ranges into interval tree\n", numRanges)
+			fmt.Printf("Loaded %d IPs into hash map\n", len(ipNumbers))
+		}
 	}
 
 	matchIP := regexp.MustCompile(`(^|[^\d\.])(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})([^\d\.]|$)`)
@@ -110,7 +122,7 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireholFile stri
 			ip := match[2]
 			numIPsFound++
 
-			if verboseOutput {
+			if debug {
 				fmt.Printf("checking ip: %v\n", ip)
 			}
 
@@ -122,38 +134,40 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireholFile stri
 			res, err := ipRanges.FindFirstOverlapping(r)
 			if err == nil {
 				// Found overlapping range.
-				info := fmt.Sprintf("%-20s - %-20s %s", res.Interval.IPRangeMin, res.Interval.IPRangeMax, res.Payload)
+				info := fmt.Sprintf("%-20s - %-20s | %s", res.Interval.IPRangeMin, res.Interval.IPRangeMax, res.Payload)
 				if _, found := dupes[ip]; found {
 					numDupes++
 				}
 				dupes[ip] = append(dupes[ip], info)
 
-				fmt.Printf("%-20s  | %-20s - %-20s %s\n", ip, res.Interval.IPRangeMin, res.Interval.IPRangeMax, res.Payload)
+				fmt.Printf("%-20s | %-20s - %-20s | %s\n", ip, res.Interval.IPRangeMin, res.Interval.IPRangeMax, res.Payload)
 				numMatchesFound++
 				continue
 			}
 
 			ipn := iputil.IP2Long(ip)
 
-			for _, ns := range ipNumbers {
-				if ns.IPs[ipn] {
-					// Found matching IP.
-					if _, found := dupes[ip]; found {
-						numDupes++
-					}
-					dupes[ip] = append(dupes[ip], ns.Vendor)
+			if srcID, found := ipNumbers[ipn]; found {
+				// Found matching IP.
+				src := ipNumberSources[srcID]
 
-					fmt.Printf("%-20s  | %s\n", ip, ns.Vendor)
-					numMatchesFound++
-					break
+				if _, found := dupes[ip]; found {
+					numDupes++
 				}
+				dupes[ip] = append(dupes[ip], src)
+
+				fmt.Printf("%-20s | %s\n", ip, src)
+				numMatchesFound++
 			}
 		}
 
 		return nil
 	})
 
-	fmt.Printf("found %d matches | checked %d IPs against %d ranges (%d dupes)\n", numMatchesFound, numIPsFound, numRanges, numDupes)
+	fmt.Printf(
+		"\nFound %d matches | Checked %d IPs against %d ranges and %d blocked or flagged IPs (%d dupes)\n",
+		numMatchesFound, numIPsFound, numRanges, len(ipNumbers), numDupes,
+	)
 
 	return
 }
@@ -247,23 +261,23 @@ func readFileOrURL(fileOrURL string, forEachLine func(lineNumber int, line strin
 func downloadURLToTempFile(url string) (filename string) {
 	res, err := http.Get(url)
 	if err != nil {
-		log.Fatalf("failed to download CSV data from URL: %s - error: %s", url, err)
+		log.Fatalf("failed to download data from URL: %s - error: %s", url, err)
 	}
 
 	if res.StatusCode >= 400 {
-		log.Fatalf("failed to download CSV data from URL: %s - got status code: %d", url, res.StatusCode)
+		log.Fatalf("failed to download data from URL: %s - got status code: %d", url, res.StatusCode)
 	}
 
 	// Create a temp file.
 	f, err := os.CreateTemp(os.TempDir(), "ips-to-check-csv")
 	if err != nil {
-		log.Fatalf("failed to create a temp file to store CSV data in - error: %s", err)
+		log.Fatalf("failed to create a temp file to store data in - error: %s", err)
 	}
 	defer f.Close()
 
 	_, err = io.Copy(f, res.Body)
 	if err != nil {
-		log.Fatalf("failed to read CSV data from HTTP response from URL: %s - error: %s", url, err)
+		log.Fatalf("failed to read data from HTTP response from URL: %s - error: %s", url, err)
 	}
 
 	return f.Name()

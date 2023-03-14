@@ -16,9 +16,12 @@ RUN CGO_ENABLED=0 go build -o /ipcheck ./cmd/ipcheck/ipcheck.go
 # Deploy
 FROM alpine:3.17
 
+RUN apk add --update openssh-client bash curl
+
 WORKDIR /
 
-COPY --from=build /ipcheck /ipcheck
-COPY --from=build /app/data/test-ips.txt /test-ips.txt
+COPY --from=build /ipcheck .
+COPY --from=build /app/data/test-ips.txt .
+COPY --from=build /app/data/test-ranges.csv .
 
 ENTRYPOINT ["/ipcheck"]
