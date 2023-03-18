@@ -95,7 +95,7 @@ Found 3 matches | Checked 6 IPs against 3 ranges and 0 blocked or flagged IPs (0
 Begin by importing the FireHOL data to a local dir (in this example `../testing`):
 
 ```bash
-$ docker run -v $(pwd)/../testing:/data anrid/ipcheck --import-firehol-to /data
+$ docker run -v $(pwd)/../testing:/data anrid/ipcheck --download /data
 
 Found 1337 IP sets
 Loaded IP set: alienvault_reputation (0 CIDRs, 609 IPs)

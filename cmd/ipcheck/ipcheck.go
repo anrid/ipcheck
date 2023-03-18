@@ -11,14 +11,15 @@ import (
 func main() {
 	inputFileOrURL := pflag.StringP("input-file", "i", "", "Path or URL to an input file containing IP addresses to check. This can be an uncompressed text file in any format. The program finds all IPs addresses on each line and tests them against all ranges.")
 	ipRangesFileOrURL := pflag.String("ip-ranges", "https://raw.githubusercontent.com/jhassine/server-ip-addresses/master/data/datacenters.csv", "Path or URL to a CSV file with IP ranges to test against.")
-	importFireHOLTo := pflag.String("import-firehol-to", "", "Download all .ipset and .netset files from https://github.com/firehol/blocklist-ipsets and merge them into one big file named `firehol.ips` in this dir")
+	downloadFireHOLTo := pflag.String("download", "", "Download all blocklists from FileHOL repo (https://github.com/firehol/blocklist-ipsets) and merge them into one big file named `firehol.ips` in this dir")
+	forceDownloadFireHOL := pflag.Bool("force-download", false, "Force (re)download of FileHOL blocklist (will delete locally cache files)")
 	fireHOLFile := pflag.StringP("firehol-file", "f", "", "Import all IP sets from https://github.com/firehol/blocklist-ipsets, merge them into one CSV file in this dir")
 	verbose := pflag.Bool("verbose", false, "Verbose output, helps when troubleshooting.")
 
 	pflag.Parse()
 
-	if *importFireHOLTo != "" {
-		firehol.Import(*importFireHOLTo, false /* force download latest data from the Firehol Github repo */)
+	if *downloadFireHOLTo != "" {
+		firehol.Download(*downloadFireHOLTo, *forceDownloadFireHOL /* force download latest data from the Firehol Github repo */)
 		os.Exit(0)
 	}
 

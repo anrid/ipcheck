@@ -5,7 +5,6 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -13,13 +12,14 @@ import (
 
 	"github.com/anrid/ipcheck/pkg/interval"
 	"github.com/anrid/ipcheck/pkg/iputil"
+	"github.com/pkg/errors"
 )
 
 const (
 	debug = false
 )
 
-func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile string, verboseOutput bool) (numMatchesFound int) {
+func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile string, verboseOutput bool) (numMatchesFound int, err error) {
 	ipRanges := interval.NewIntervalTree()
 	ipNumbers := make(map[uint32]uint16)
 	ipNumberSources := make(map[uint16]string)
@@ -36,7 +36,10 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile stri
 
 		cidr := record[0]
 		vendor := record[3]
-		start, end := iputil.CIDRToIPRange(cidr)
+		start, end, err := iputil.CIDRToIPRange(cidr)
+		if err != nil {
+			return err
+		}
 
 		r, err := interval.NewInterval(start, end)
 		if err != nil {
@@ -65,7 +68,7 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile stri
 
 		f, err := os.Open(fireHOLFile)
 		if err != nil {
-			log.Fatalf("could not open FireHOL DB file: %s - error: %s\n", fireHOLFile, err)
+			return 0, errors.Wrapf(err, "could not open FireHOL DB file: %s", fireHOLFile)
 		}
 		defer f.Close()
 
@@ -78,6 +81,10 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile stri
 			if len(t) > 0 {
 				if t[0] == '#' {
 					src = t[2:]
+					if !verboseOutput {
+						parts := strings.Split(src, " | ")
+						src = parts[0]
+					}
 					srcID++
 					ipNumberSources[srcID] = src
 					continue
@@ -85,11 +92,14 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile stri
 
 				if strings.ContainsRune(t, '/') {
 					// CIDR
-					start, end := iputil.CIDRToIPRange(t)
+					start, end, err := iputil.CIDRToIPRange(t)
+					if err != nil {
+						return 0, err
+					}
 
 					r, err := interval.NewInterval(start, end)
 					if err != nil {
-						log.Panicf("could not create interval for CIDR %s (%s - %s)", t, start, end)
+						return 0, errors.Wrapf(err, "could not create interval for CIDR %s (%s - %s)", t, start, end)
 					}
 
 					ipRanges.Upsert(r, src)
@@ -134,13 +144,13 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile stri
 			res, err := ipRanges.FindFirstOverlapping(r)
 			if err == nil {
 				// Found overlapping range.
-				info := fmt.Sprintf("%-20s - %-20s | %s", res.Interval.IPRangeMin, res.Interval.IPRangeMax, res.Payload)
+				info := fmt.Sprintf("%s - %s | %s", res.Interval.IPRangeMin, res.Interval.IPRangeMax, res.Payload)
 				if _, found := dupes[ip]; found {
 					numDupes++
 				}
 				dupes[ip] = append(dupes[ip], info)
 
-				fmt.Printf("%-20s | %-20s - %-20s | %s\n", ip, res.Interval.IPRangeMin, res.Interval.IPRangeMax, res.Payload)
+				fmt.Printf("%s  <==  %-5s | %s - %s\n", line, res.Payload, res.Interval.IPRangeMin, res.Interval.IPRangeMax)
 				numMatchesFound++
 				continue
 			}
@@ -156,7 +166,7 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile stri
 				}
 				dupes[ip] = append(dupes[ip], src)
 
-				fmt.Printf("%-20s | %s\n", ip, src)
+				fmt.Printf("%s  <==  %s\n", line, src)
 				numMatchesFound++
 			}
 		}
@@ -177,24 +187,27 @@ type IPMap struct {
 	IPs    map[uint32]bool
 }
 
-func readCSVFileOrURL(fileOrURL string, forEachRecord func(recordNumber int, record []string) error) {
+func readCSVFileOrURL(fileOrURL string, forEachRecord func(recordNumber int, record []string) error) error {
 	file := fileOrURL
 
 	_, err := os.Stat(fileOrURL)
 	if err != nil {
-		if err == os.ErrNotExist {
-			log.Fatalf("got unexpected error when trying to stat file (or URL): %s - error: %s", fileOrURL, err)
+		if !os.IsNotExist(err) {
+			return errors.Wrapf(err, "got unexpected error when trying to stat file (or URL): %s", fileOrURL)
 		}
 
 		// Treat this as a URL. Download its contents to a local temp location.
-		file = downloadURLToTempFile(fileOrURL)
+		file, err = downloadURLToTempFile(fileOrURL)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Treat file as a local CSV file at this point.
 
 	f, err := os.Open(file)
 	if err != nil {
-		log.Fatalf("failed to open CSV file: %s - error: %s", file, err)
+		return errors.Wrapf(err, "failed to open CSV file: %s", file)
 	}
 	defer f.Close()
 
@@ -205,7 +218,7 @@ func readCSVFileOrURL(fileOrURL string, forEachRecord func(recordNumber int, rec
 		rec, err := cr.Read()
 		if err != nil {
 			if err != io.EOF {
-				log.Fatalf("failed to read CSV record from file: %s - error: %s", file, err)
+				return errors.Wrapf(err, "failed to read CSV record from file: %s", file)
 			}
 			// We're done.
 			break
@@ -214,29 +227,34 @@ func readCSVFileOrURL(fileOrURL string, forEachRecord func(recordNumber int, rec
 		recordNumber++
 		err = forEachRecord(recordNumber, rec)
 		if err != nil {
-			log.Fatalf("failed to process CSV record - error: %s", err)
+			return errors.Wrapf(err, "failed to process CSV record")
 		}
 	}
+
+	return nil
 }
 
-func readFileOrURL(fileOrURL string, forEachLine func(lineNumber int, line string) error) {
+func readFileOrURL(fileOrURL string, forEachLine func(lineNumber int, line string) error) error {
 	file := fileOrURL
 
 	_, err := os.Stat(fileOrURL)
 	if err != nil {
-		if err == os.ErrNotExist {
-			log.Fatalf("got unexpected error when trying to stat file (or URL): %s - error: %s", fileOrURL, err)
+		if !os.IsNotExist(err) {
+			return errors.Wrapf(err, "got unexpected error when trying to stat file (or URL): %s", fileOrURL)
 		}
 
 		// Treat this as a URL. Download its contents to a local temp location.
-		file = downloadURLToTempFile(fileOrURL)
+		file, err = downloadURLToTempFile(fileOrURL)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Treat file as a local file at this point.
 
 	f, err := os.Open(file)
 	if err != nil {
-		log.Fatalf("failed to open file: %s - error: %s", file, err)
+		return errors.Wrapf(err, "failed to open file: %s", file)
 	}
 	defer f.Close()
 
@@ -250,35 +268,37 @@ func readFileOrURL(fileOrURL string, forEachLine func(lineNumber int, line strin
 
 		err := forEachLine(lineNumber, line)
 		if err != nil {
-			log.Fatalf("failed to process line - error: %s", err)
+			return errors.Wrapf(err, "failed to process line")
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		log.Fatalf("failed to read line from file: %s - error: %s", file, err)
+		return errors.Wrapf(err, "failed to read line from file: %s", file)
 	}
+
+	return nil
 }
 
-func downloadURLToTempFile(url string) (filename string) {
+func downloadURLToTempFile(url string) (filename string, err error) {
 	res, err := http.Get(url)
 	if err != nil {
-		log.Fatalf("failed to download data from URL: %s - error: %s", url, err)
+		return "", errors.Wrapf(err, "failed to download data from URL: %s", url)
 	}
 
 	if res.StatusCode >= 400 {
-		log.Fatalf("failed to download data from URL: %s - got status code: %d", url, res.StatusCode)
+		return "", errors.Errorf("failed to download data from URL: %s - got status code: %d", url, res.StatusCode)
 	}
 
 	// Create a temp file.
 	f, err := os.CreateTemp(os.TempDir(), "ips-to-check-csv")
 	if err != nil {
-		log.Fatalf("failed to create a temp file to store data in - error: %s", err)
+		return "", errors.Wrapf(err, "failed to create a temp file to store data in")
 	}
 	defer f.Close()
 
 	_, err = io.Copy(f, res.Body)
 	if err != nil {
-		log.Fatalf("failed to read data from HTTP response from URL: %s - error: %s", url, err)
+		return "", errors.Wrapf(err, "failed to read data from HTTP response from URL: %s", url)
 	}
 
-	return f.Name()
+	return f.Name(), nil
 }

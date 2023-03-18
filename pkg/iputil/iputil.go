@@ -3,8 +3,9 @@ package iputil
 import (
 	"bytes"
 	"encoding/binary"
-	"log"
 	"net"
+
+	"github.com/pkg/errors"
 )
 
 func IP2Long(ip string) uint32 {
@@ -19,11 +20,11 @@ func Long2IP(n uint32) string {
 	return ip.To4().String()
 }
 
-func CIDRToIPRange(cidr string) (startIP, endIP string) {
+func CIDRToIPRange(cidr string) (startIP, endIP string, err error) {
 	// Convert string to IPNet struct
 	_, ipv4Net, err := net.ParseCIDR(cidr)
 	if err != nil {
-		log.Panicf("could not convert CIDR '%s' to IP range: %s", cidr, err)
+		return "", "", errors.Wrapf(err, "could not convert CIDR '%s' to IP range", cidr)
 	}
 
 	// Convert IPNet struct mask and address to uint32.

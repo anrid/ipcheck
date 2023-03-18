@@ -9,14 +9,18 @@ import (
 	"strings"
 
 	"github.com/anrid/ipcheck/pkg/iputil"
+	"github.com/pkg/errors"
 )
 
 const (
 	fireHOLBlocklistRepoURL = "https://github.com/firehol/blocklist-ipsets/archive/refs/heads/master.zip"
 )
 
-func Import(outDir string, forceDownload bool) {
-	createDirIfNotExists(outDir)
+func Download(outDir string, forceDownload bool) error {
+	err := createDirIfNotExists(outDir)
+	if err != nil {
+		errors.Wrapf(err, "failed to create FireHOL import dir: %s", outDir)
+	}
 
 	unpackedDir := filepath.Join(outDir, "blocklist-ipsets-master")
 	zipFile := filepath.Join(outDir, "master.zip")
@@ -27,28 +31,45 @@ func Import(outDir string, forceDownload bool) {
 		if forceDownload {
 			fmt.Printf("Force download flag passed, removing local files and downloading Git repo again ..\n")
 
+			// Delete existing FireHOL blocklist repo dir.
 			err := os.RemoveAll(unpackedDir)
 			if err != nil {
-				log.Fatalf("could not delete existing dir: %s - error: %s", unpackedDir, err)
+				return errors.Wrapf(err, "could not delete existing dir: %s", unpackedDir)
 			}
 			// Try deleting old zip archive.
 			os.Remove(zipFile)
 
-			wgetURL(fireHOLBlocklistRepoURL, outDir)
+			err = wgetURL(fireHOLBlocklistRepoURL, outDir)
+			if err != nil {
+				return errors.Wrapf(err, "could not execute `wget` command on URL: %s", fireHOLBlocklistRepoURL)
+			}
 			unzip(outDir, zipFile)
+			if err != nil {
+				return errors.Wrapf(err, "could not execute `unzip` command on zip file: %s", zipFile)
+			}
 		}
 	} else {
-		wgetURL(fireHOLBlocklistRepoURL, outDir)
-		unzip(outDir, zipFile)
+		err = wgetURL(fireHOLBlocklistRepoURL, outDir)
+		if err != nil {
+			return errors.Wrapf(err, "could not execute `wget` command on URL: %s", fireHOLBlocklistRepoURL)
+		}
+		err = unzip(outDir, zipFile)
+		if err != nil {
+			return errors.Wrapf(err, "could not execute `unzip` command on zip file: %s", zipFile)
+		}
 	}
 
-	files := findAllIPAndNetsets(unpackedDir)
+	files, err := findAllIPAndNetsets(unpackedDir)
+	if err != nil {
+		return errors.Wrap(err, "FireHOL import failed")
+	}
+
 	fmt.Printf("Found %d IP sets\n", len(files))
 
 	outFile := filepath.Join(outDir, "firehol.ips")
 	of, err := os.Create(outFile)
 	if err != nil {
-		log.Fatalf("could not create output file: %s - %s", outFile, err)
+		return errors.Wrapf(err, "could not create output file: %s", outFile)
 	}
 	defer of.Close()
 
@@ -71,7 +92,12 @@ SKIP:
 			}
 		}
 
-		ips := loadIPSet(f)
+		ips, err := loadIPSet(f)
+		if err != nil {
+			fmt.Printf("Skipping invaild IP set: %s\n", f)
+			continue
+		}
+
 		importedSets++
 
 		fmt.Printf("Loaded IP set: %s (%d CIDRs, %d IPs)\n", ips.Name, len(ips.CIDRs), len(ips.IPs))
@@ -105,6 +131,8 @@ SKIP:
 		"\nImported FireHOL %d blocklists (%d ranges, %d blocked / flagged IPs, %d dupes)\n",
 		importedSets, importedRanges, importedIPs, numDupes,
 	)
+
+	return nil
 }
 
 type IPSet struct {
@@ -115,12 +143,11 @@ type IPSet struct {
 	IPs           []string
 }
 
-func loadIPSet(file string) *IPSet {
+func loadIPSet(file string) (*IPSet, error) {
 	// fmt.Printf("Loading IP Set: %s\n", file)
-
 	b, err := os.ReadFile(file)
 	if err != nil {
-		log.Fatalf("could not load IPSet from file: %s - error: %s", file, err)
+		return nil, errors.Wrapf(err, "could not load IPSet from file: %s", file)
 	}
 
 	ips := new(IPSet)
@@ -160,13 +187,13 @@ func loadIPSet(file string) *IPSet {
 		}
 	}
 
-	return ips
+	return ips, nil
 }
 
-func findAllIPAndNetsets(dir string) (files []string) {
+func findAllIPAndNetsets(dir string) (files []string, err error) {
 	var totalSize int64
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -182,33 +209,34 @@ func findAllIPAndNetsets(dir string) (files []string) {
 		return nil
 	})
 	if err != nil {
-		log.Println(err)
+		return nil, errors.Wrapf(err, "could not walk dir: %s", dir)
 	}
 
-	return
+	return files, nil
 }
 
-func wgetURL(url, dir string) {
-	res := mustExecCommand("wget", "-q", "-P", dir, url)
+func wgetURL(url, dir string) error {
+	res, err := execCommand("wget", "-q", "-P", dir, url)
 	fmt.Println(res)
+	return err
 }
 
-func unzip(outDir, file string) {
-	res := mustExecCommand("unzip", "-oq", "-d", outDir, file)
+func unzip(outDir, file string) error {
+	res, err := execCommand("unzip", "-oq", "-d", outDir, file)
 	fmt.Println(res)
+	return err
 }
 
-func mustExecCommand(command string, args ...string) (stdoutStderr string) {
+func execCommand(command string, args ...string) (stdoutStderr string, err error) {
 	fmt.Printf("Running command:\n%s %v\n", command, args)
 
 	cmd := exec.Command(command, args...)
 	o, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Fatal(err)
+		return "", errors.Wrapf(err, "could not execute command: %s %v", command, args)
 	}
 
-	stdoutStderr = string(o)
-	return
+	return string(o), nil
 }
 
 func isDir(path string) bool {
@@ -217,26 +245,27 @@ func isDir(path string) bool {
 		if os.IsNotExist(err) {
 			return false
 		}
-		log.Panicf("unknown error: %s", err)
+		log.Panicf("unknown error when checking dir: %s  -  error: %s", path, err)
 	}
 	return s.IsDir()
 }
 
-func createDirIfNotExists(path string) {
+func createDirIfNotExists(path string) error {
 	s, err := os.Stat(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			log.Panicf("could not access path %s - error: %s", path, err)
+			return errors.Wrapf(err, "could not access path %s", path)
 		}
 
 		fmt.Printf("Creating dir %s ..", path)
 		err = os.Mkdir(path, 0777)
 		if err != nil {
-			log.Fatalf("could not create dir %s", path)
+			return errors.Wrapf(err, "could not create dir %s", path)
 		}
 	} else {
 		if !s.IsDir() {
-			log.Fatalf("path %s is not a dir", path)
+			return errors.Errorf("path %s is not a dir", path)
 		}
 	}
+	return nil
 }
