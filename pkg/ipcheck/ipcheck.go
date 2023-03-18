@@ -19,16 +19,25 @@ const (
 	debug = false
 )
 
-func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile string, verboseOutput bool) (numMatchesFound int, err error) {
+type CheckAgainstIPRangesParams struct {
+	InputFileORURL              string
+	IPRangesCSVFileOrURL        string
+	FireHOLFile                 string
+	ShowAdditionalBlocklistInfo bool
+	VerboseOutput               bool
+	ToCSVFile                   string
+}
+
+func CheckAgainstIPRanges(p CheckAgainstIPRangesParams) (numMatchedIPsFound int, err error) {
 	ipRanges := interval.NewIntervalTree()
 	ipNumbers := make(map[uint32]uint16)
 	ipNumberSources := make(map[uint16]string)
 	var numRanges int
 
-	if verboseOutput {
-		fmt.Printf("Reading IP ranges from %s ..\n", ipRangesCSVFileOrURL)
+	if p.VerboseOutput {
+		fmt.Printf("Reading IP ranges from %s ..\n", p.IPRangesCSVFileOrURL)
 	}
-	readCSVFileOrURL(ipRangesCSVFileOrURL, func(recordNumber int, record []string) error {
+	readCSVFileOrURL(p.IPRangesCSVFileOrURL, func(recordNumber int, record []string) error {
 		if recordNumber == 1 {
 			// Skip headers.
 			return nil
@@ -53,7 +62,7 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile stri
 		return nil
 	})
 
-	if verboseOutput {
+	if p.VerboseOutput {
 		fmt.Printf("Loaded %d IP ranges into interval tree\n", numRanges)
 		fmt.Printf("Loaded %d IPs into hash map\n", len(ipNumbers))
 	}
@@ -61,14 +70,14 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile stri
 	// Check against FireHOL data imported from here: https://github.com/firehol/blocklist-ipsets
 	// If you don't know, FireHOL is "an iptables stateful packet filtering firewall for humans!".
 	// Learn more at https://github.com/firehol/firehol.
-	if fireHOLFile != "" {
-		if verboseOutput {
-			fmt.Printf("Loading FireHOL data from %s (this takes a while) ..\n", fireHOLFile)
+	if p.FireHOLFile != "" {
+		if p.VerboseOutput {
+			fmt.Printf("Loading FireHOL data from %s (this takes a while) ..\n", p.FireHOLFile)
 		}
 
-		f, err := os.Open(fireHOLFile)
+		f, err := os.Open(p.FireHOLFile)
 		if err != nil {
-			return 0, errors.Wrapf(err, "could not open FireHOL DB file: %s", fireHOLFile)
+			return 0, errors.Wrapf(err, "could not open FireHOL DB file: %s", p.FireHOLFile)
 		}
 		defer f.Close()
 
@@ -81,7 +90,7 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile stri
 			if len(t) > 0 {
 				if t[0] == '#' {
 					src = t[2:]
-					if !verboseOutput {
+					if !p.ShowAdditionalBlocklistInfo {
 						parts := strings.Split(src, " | ")
 						src = parts[0]
 					}
@@ -111,20 +120,21 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile stri
 				}
 			}
 		}
-		if verboseOutput {
+		if p.VerboseOutput {
 			fmt.Printf("Loaded %d IP ranges into interval tree\n", numRanges)
 			fmt.Printf("Loaded %d IPs into hash map\n", len(ipNumbers))
 		}
 	}
 
-	matchIP := regexp.MustCompile(`(^|[^\d\.])(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})([^\d\.]|$)`)
+	findIPs := regexp.MustCompile(`(^|[^\d\.])(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})([^\d\.]|$)`)
 	var numIPsFound, numDupes int
 	dupes := make(map[string][]string)
+	matchedIPs := [][]string{{"IP", "Info"}}
 
-	readFileOrURL(inputFileOrURL, func(lineNumber int, line string) error {
-		matches := matchIP.FindAllStringSubmatch(line, -1)
+	readFileOrURL(p.InputFileORURL, func(lineNumber int, line string) error {
+		ipsFound := findIPs.FindAllStringSubmatch(line, -1)
 
-		for _, match := range matches {
+		for _, match := range ipsFound {
 			if len(match) < 3 {
 				continue
 			}
@@ -144,14 +154,16 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile stri
 			res, err := ipRanges.FindFirstOverlapping(r)
 			if err == nil {
 				// Found overlapping range.
-				info := fmt.Sprintf("%s - %s | %s", res.Interval.IPRangeMin, res.Interval.IPRangeMax, res.Payload)
+				info := fmt.Sprintf("%s | %s - %s", res.Payload, res.Interval.IPRangeMin, res.Interval.IPRangeMax)
 				if _, found := dupes[ip]; found {
 					numDupes++
+				} else {
+					matchedIPs = append(matchedIPs, []string{ip, info})
 				}
 				dupes[ip] = append(dupes[ip], info)
 
 				fmt.Printf("%s  <==  %-5s | %s - %s\n", line, res.Payload, res.Interval.IPRangeMin, res.Interval.IPRangeMax)
-				numMatchesFound++
+				numMatchedIPsFound++
 				continue
 			}
 
@@ -163,11 +175,13 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile stri
 
 				if _, found := dupes[ip]; found {
 					numDupes++
+				} else {
+					matchedIPs = append(matchedIPs, []string{ip, src})
 				}
 				dupes[ip] = append(dupes[ip], src)
 
 				fmt.Printf("%s  <==  %s\n", line, src)
-				numMatchesFound++
+				numMatchedIPsFound++
 			}
 		}
 
@@ -176,15 +190,38 @@ func CheckAgainstIPRanges(inputFileOrURL, ipRangesCSVFileOrURL, fireHOLFile stri
 
 	fmt.Printf(
 		"\nFound %d matches | Checked %d IPs against %d ranges and %d blocked or flagged IPs (%d dupes)\n",
-		numMatchesFound, numIPsFound, numRanges, len(ipNumbers), numDupes,
+		numMatchedIPsFound, numIPsFound, numRanges, len(ipNumbers), numDupes,
 	)
 
-	return
+	if p.ToCSVFile != "" {
+		err = matchedIPsToCSVFile(p.ToCSVFile, matchedIPs)
+		if err != nil {
+			return 0, err
+		}
+		fmt.Printf("Wrote %s\n", p.ToCSVFile)
+	}
+
+	return numMatchedIPsFound, nil
 }
 
 type IPMap struct {
 	Vendor string
 	IPs    map[uint32]bool
+}
+
+func matchedIPsToCSVFile(file string, matchedIPs [][]string) error {
+	f, err := os.Create(file)
+	if err != nil {
+		return errors.Wrapf(err, "could not create CSV file: %s", file)
+	}
+	defer f.Close()
+
+	err = csv.NewWriter(f).WriteAll(matchedIPs)
+	if err != nil {
+		return errors.Wrapf(err, "could not write %d matched IPs to CSV file: %s", len(matchedIPs), file)
+	}
+
+	return nil
 }
 
 func readCSVFileOrURL(fileOrURL string, forEachRecord func(recordNumber int, record []string) error) error {

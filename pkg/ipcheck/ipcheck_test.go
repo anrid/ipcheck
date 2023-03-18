@@ -7,12 +7,11 @@ import (
 )
 
 func TestIPCheck(t *testing.T) {
-	found, err := CheckAgainstIPRanges(
-		"../../data/test-ips.txt",
-		"https://raw.githubusercontent.com/jhassine/server-ip-addresses/master/data/datacenters.csv",
-		"",
-		true,
-	)
+	found, err := CheckAgainstIPRanges(CheckAgainstIPRangesParams{
+		InputFileORURL:       "../../data/test-ips.txt",
+		IPRangesCSVFileOrURL: "https://raw.githubusercontent.com/jhassine/server-ip-addresses/master/data/datacenters.csv",
+		VerboseOutput:        true,
+	})
 	require.NoError(t, err)
 	require.Equal(t, 3, found)
 }

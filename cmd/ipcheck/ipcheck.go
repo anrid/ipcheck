@@ -15,6 +15,8 @@ func main() {
 	forceDownloadFireHOL := pflag.Bool("force-download", false, "Force (re)download of all FileHOL blocklists (will delete locally cached files)")
 	fireHOLFile := pflag.StringP("firehol-file", "f", "", "Import all IP sets from https://github.com/firehol/blocklist-ipsets, merge them into one CSV file in this dir")
 	verbose := pflag.Bool("verbose", false, "Verbose output, helps when troubleshooting.")
+	showMore := pflag.Bool("more-info", true, "Show additional blocklist info for each IP match.")
+	toCSVFile := pflag.String("to-csv-file", "", "Export all matched IPs to the given CSV file (e.g. ./matches.csv)")
 
 	pflag.Parse()
 
@@ -28,5 +30,12 @@ func main() {
 		os.Exit(-1)
 	}
 
-	ipcheck.CheckAgainstIPRanges(*inputFileOrURL, *ipRangesFileOrURL, *fireHOLFile, *verbose)
+	ipcheck.CheckAgainstIPRanges(ipcheck.CheckAgainstIPRangesParams{
+		InputFileORURL:              *inputFileOrURL,
+		IPRangesCSVFileOrURL:        *ipRangesFileOrURL,
+		FireHOLFile:                 *fireHOLFile,
+		VerboseOutput:               *verbose,
+		ShowAdditionalBlocklistInfo: *showMore,
+		ToCSVFile:                   *toCSVFile,
+	})
 }
