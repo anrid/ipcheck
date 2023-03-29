@@ -19,9 +19,9 @@ $ docker run --rm --entrypoint bash anrid/ipcheck -c 'cat /test-ips.txt'
 
 34.64.161.255
 15.177.101.100
-aws---- ip3.2.35.193
-aaazureee 20.209.46.151xxx
-2023-03-11.10:10:10.23020 access_log--ip:4.4.4.4 aaa 8.8.8.8
+aws: ---- ip 3.2.35.193
+azure(20.209.46.151)=xxx
+2023-03-11.10:10:10.23020 access_log -- ip:4.4.4.4 | ip:8.8.8.8
 ```
 
 - Each line in the input file may contain text besides IP addresses.
@@ -29,16 +29,16 @@ aaazureee 20.209.46.151xxx
 
 ## Basic Usage
 
-To check IPs against known datacenter IP ranges, simply do:
+To check an input file with IP addresses against known datacenter IP ranges:
 
 ```bash
 $ docker run --rm anrid/ipcheck -i /test-ips.txt
 
-34.64.161.255        | 34.64.160.0          - 34.64.191.255        | GCP
-3.2.35.193           | 3.2.35.192           - 3.2.35.255           | AWS
-20.209.46.151        | 20.209.0.0           - 20.209.255.255       | Azure
+34.64.161.255  <==  GCP   | 34.64.160.0 - 34.64.191.255
+aws: ---- ip 3.2.35.193  <==  AWS   | 3.2.35.192 - 3.2.35.255
+azure(20.209.46.151)=xxx  <==  Azure | 20.209.0.0 - 20.209.255.255
 
-Found 3 matches | Checked 6 IPs against 33365 ranges and 0 blocked or flagged IPs (0 dupes)
+Found 3 matches | Checked 6 IPs against 33279 ranges and 0 blocked or flagged IPs (0 dupes)
 ```
 
 - Scanned the input file and found `6` IPs.
@@ -53,9 +53,9 @@ $ docker run --rm -v $(pwd)/../bigquery-exports:/data anrid/ipcheck -i /data/bq-
 
 .. lots of omitted ..
 
-54.249.174.66        | 54.248.0.0           - 54.249.255.255       | AWS
-13.231.129.239       | 13.230.0.0           - 13.231.255.255       | AWS
-52.197.13.28         | 52.196.0.0           - 52.199.255.255       | AWS
+54.249.174.66   <==  AWS    | 54.248.0.0 - 54.249.255.255
+13.231.129.239  <==  AWS    | 13.230.0.0 - 13.231.255.255
+52.197.13.28    <==  AWS    | 52.196.0.0 - 52.199.255.255
 
 Found 882 matches | Checked 588933 IPs against 33365 ranges and 0 blocked or flagged IPs (0 dupes)
 ```
@@ -82,73 +82,86 @@ Then pass in your CSV file using the `--ip-ranges` flag:
 
 ```bash
 $ docker run --rm -v $(pwd)/data:/data anrid/ipcheck -i /data/test-ips.txt --ip-ranges /data/test-ranges.csv
-
-34.64.161.255        | 34.64.160.0          - 34.64.191.255        | GCP
-3.2.35.193           | 3.2.35.192           - 3.2.35.255           | AWS
-20.209.46.151        | 20.209.46.0          - 20.209.47.255        | Azure
-
-Found 3 matches | Checked 6 IPs against 3 ranges and 0 blocked or flagged IPs (0 dupes)
 ```
 
 ## Test against FireHOL blocklists
 
-Begin by importing the FireHOL data to a local dir (in this example `../testing`):
+Being by downloading the lastest FireHOL blocklists to a local Docker volume:
 
 ```bash
-$ docker run -v $(pwd)/../testing:/data anrid/ipcheck --download /data
+# Create a new local Docker volume named `fire`
+$ docker volume create fire
+fire
+
+# Download latest FireHOL blocklists into local Docker volume
+$ docker run -v file:/data anrid/ipcheck --download /data/fire
 
 Found 1337 IP sets
 Loaded IP set: alienvault_reputation (0 CIDRs, 609 IPs)
 Loaded IP set: asprox_c2 (0 CIDRs, 0 IPs)
 Loaded IP set: bambenek_banjori (0 CIDRs, 136 IPs)
-Loaded IP set: bambenek_bebloh (0 CIDRs, 0 IPs)
-Loaded IP set: bambenek_c2 (0 CIDRs, 1 IPs)
 
 .. lots of lines omitted ..
 
-Loaded IP set: xroxy (0 CIDRs, 24 IPs)
-Loaded IP set: xroxy_1d (0 CIDRs, 24 IPs)
 Loaded IP set: xroxy_30d (0 CIDRs, 24 IPs)
 Loaded IP set: xroxy_7d (0 CIDRs, 24 IPs)
 Loaded IP set: yoyo_adservers (0 CIDRs, 9942 IPs)
 
-Imported FireHOL 318 blocklists (120047 ranges, 3604185 blocked / flagged IPs, 4080332 dupes)
+Imported FireHOL 318 blocklists (120571 ranges, 3611584 blocked / flagged IPs, 4113069 dupes)
 ```
 
-You should now have the following files locally:
+You should now have the following files in your Docker volume:
 
 ```bash
-$ ls -l ../testing
+$ docker run -v file:/data --entrypoint bash anrid/ipcheck -c 'ls -l /data/fire'
 
-total 85436
-drwxr-xr-x  3 root root     4096 Mar 12 10:28 ./
-drwxr-xr-x 37 anri anri     4096 Mar 12 10:28 ../
-drwxrwxrwx  6 root root    20480 Mar 12 10:28 blocklist-ipsets-master/
--rw-r--r--  1 root root 53482434 Mar 12 10:28 firehol.ips
--rw-r--r--  1 root root 33966427 Mar 12 10:28 master.zip
+total 85696
+drwxrwxrwx    6 root     root         20480 Mar 10 01:05 blocklist-ipsets-master
+-rw-r--r--    1 root     root      53595811 Mar 10 01:05 firehol.ips
+-rw-r--r--    1 root     root      34136038 Mar 10 01:05 master.zip
 ```
 
 - `firehol.ips` now contains `120,047` IP ranges and `3,604,185` blocked / flagged IPs.
 
-Check IPs against both the FireHOL database and the default datacenter ranges:
+To check an input file with IPs against both the FireHOL blocklists and the default datacenter ranges:
 
 ```bash
 # Note that we're passing the `--verbose` to see more of what's going on.
-$ docker run -v $(pwd)/../testing:/data anrid/ipcheck -i /test-ips.txt --firehol-file /data/firehol.ips --verbose
+$ docker run -v file:/data anrid/ipcheck -i /test-ips.txt --firehol-file /data/fire/firehol.ips --verbose
 
 Reading IP ranges from https://raw.githubusercontent.com/jhassine/server-ip-addresses/master/data/datacenters.csv ..
-Loaded 33365 IP ranges into interval tree
+Loaded 33279 IP ranges into interval tree
 Loaded 0 IPs into hash map
-Loading FireHOL data from /data/firehol.ips (this takes a while) ..
-Loaded 153412 IP ranges into interval tree
-Loaded 3604185 IPs into hash map
+Loading FireHOL data from /data/fire/firehol.ips (this takes a while) ..
+Loaded 153850 IP ranges into interval tree
+Loaded 3611584 IPs into hash map
 
-34.64.161.255        | 34.64.0.0            - 34.127.255.255       | pushing_inertia_blocklist | Pushing Inertia | https://github.com/pushinginertia/ip-blacklist (1307 CIDRs, 2 IPs)
-3.2.35.193           | 3.2.35.192           - 3.2.35.255           | AWS
-20.209.46.151        | 20.209.0.0           - 20.209.255.255       | Azure
-4.4.4.4              | 4.0.0.0              - 4.255.255.255        | iblocklist_org_joost | iBlocklist.com | https://www.iblocklist.com/ (4 CIDRs, 0 IPs)
+34.64.161.255  <==  pushing_inertia_blocklist | Pushing Inertia | https://github.com/pushinginertia/ip-blacklist (1307 CIDRs, 2 IPs) | 34.64.0.0 - 34.127.255.255
+aws---- ip3.2.35.193  <==  AWS   | 3.2.35.192 - 3.2.35.255
+aaazureee 20.209.46.151xxx  <==  Azure | 20.209.0.0 - 20.209.255.255
+2023-03-11.10:10:10.23020 access_log--ip:4.4.4.4 aaa 8.8.8.8  <==  iblocklist_org_joost | iBlocklist.com | https://www.iblocklist.com/ (4 CIDRs, 0 IPs) | 4.0.0.0 - 4.255.255.255
 
-Found 4 matches | Checked 6 IPs against 153412 ranges and 3604185 blocked or flagged IPs (0 dupes)
+Found 4 matches | Checked 6 IPs against 153850 ranges and 3611584 blocked or flagged IPs (0 dupes)
 ```
 
 - Note that loading the `firehol.ips` file into memory takes some time (`~15 sec` on a MacBook Pro).
+
+### Output to CSV file
+
+```bash
+# Note that the `--to-csv-file` flag takes a path to an output file.
+# In this case we output to a mounted local dir.
+$ docker run -v file:/data -v $(pwd)/..:/out anrid/ipcheck -i /test-ips.txt --firehol-file /data/fire/firehol.ips --to-csv-file /out/blocked-ips.csv
+
+Found 4 matches | Checked 6 IPs against 153850 ranges and 3611584 blocked or flagged IPs (0 dupes)
+Wrote /out/blocked-ips.csv
+
+# We now have a file named `blocked-ips.csv` in $(pwd)/..
+$ cat ../blocked-ips.csv
+
+IP,Info
+34.64.161.255,"pushing_inertia_blocklist | Pushing Inertia | https://github.com/pushinginertia/ip-blacklist (1307 CIDRs, 2 IPs) | 34.64.0.0 - 34.127.255.255"
+3.2.35.193,AWS | 3.2.35.192 - 3.2.35.255
+20.209.46.151,Azure | 20.209.0.0 - 20.209.255.255
+4.4.4.4,"iblocklist_org_joost | iBlocklist.com | https://www.iblocklist.com/ (4 CIDRs, 0 IPs) | 4.0.0.0 - 4.255.255.255"
+```

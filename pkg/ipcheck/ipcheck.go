@@ -162,7 +162,9 @@ func CheckAgainstIPRanges(p CheckAgainstIPRangesParams) (numMatchedIPsFound int,
 				}
 				dupes[ip] = append(dupes[ip], info)
 
-				fmt.Printf("%s  <==  %-5s | %s - %s\n", line, res.Payload, res.Interval.IPRangeMin, res.Interval.IPRangeMax)
+				if p.ToCSVFile == "" {
+					fmt.Printf("%s  <==  %-5s | %s - %s\n", line, res.Payload, res.Interval.IPRangeMin, res.Interval.IPRangeMax)
+				}
 				numMatchedIPsFound++
 				continue
 			}
@@ -180,7 +182,9 @@ func CheckAgainstIPRanges(p CheckAgainstIPRangesParams) (numMatchedIPsFound int,
 				}
 				dupes[ip] = append(dupes[ip], src)
 
-				fmt.Printf("%s  <==  %s\n", line, src)
+				if p.ToCSVFile == "" {
+					fmt.Printf("%s  <==  %s\n", line, src)
+				}
 				numMatchedIPsFound++
 			}
 		}
